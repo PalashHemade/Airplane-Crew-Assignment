@@ -18,6 +18,29 @@ export const DEFAULT_MATRIX: number[][] = [
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+function getGreedyIncumbent(matrix: number[][]): { assignments: Assignment[], cost: number } {
+  const n = matrix.length;
+  const assignments: Assignment[] = [];
+  let cost = 0;
+  const usedFlights = new Set<number>();
+
+  for (let c = 0; c < n; c++) {
+    let minCost = Infinity;
+    let minFlight = -1;
+    for (let f = 0; f < n; f++) {
+      if (!usedFlights.has(f) && matrix[c][f] < minCost) {
+        minCost = matrix[c][f];
+        minFlight = f;
+      }
+    }
+    usedFlights.add(minFlight);
+    assignments.push({ crew: c, flight: minFlight });
+    cost += minCost;
+  }
+
+  return { assignments, cost };
+}
+
 function label(prefix: string, i: number) {
   return `${prefix}${i + 1}`;
 }
@@ -103,8 +126,10 @@ export function runBranchAndBound(matrix: number[][]): Step[] {
   const n = matrix.length;
   const steps: Step[] = [];
   let nodeCounter = 0;
-  let currentUC = Infinity;
-  let incumbentAssignments: Assignment[] = [];
+  
+  const greedy = getGreedyIncumbent(matrix);
+  let currentUC = greedy.cost;
+  let incumbentAssignments: Assignment[] = greedy.assignments;
 
   // All nodes ever created (grows over time)
   const allNodes: Map<number, BBNode> = new Map();
@@ -163,8 +188,8 @@ export function runBranchAndBound(matrix: number[][]): Step[] {
   exploredIds.add(root.id);
 
   pushStep(
-    "Root node created",
-    `We start at the root node. No crew has been assigned yet.\n\nThe Lower Bound (LC) at the root is calculated by taking the minimum possible cost for each crew: LC = ${rootLC}.\n\nThis is our starting point. We will now explore assignments level by level — one crew at a time.`,
+    "Initialization & Root Node",
+    `1. Initial Upper Bound (UC):\nWe used a "greedy" heuristic (assigning each crew sequentially to their cheapest available flight) to find a quick, valid assignment. This gives us our initial Upper Cost (UC) = ${currentUC}.\nPath: ${greedy.assignments.map((a) => `C${a.crew + 1}→F${a.flight + 1}`).join(", ")}.\n\n2. Root Node:\nWe start at the root node. No crew has been assigned yet.\n\nThe Lower Bound (LC) at the root is calculated by taking the minimum possible cost for each crew over any flight: LC = ${rootLC}.\n\nThis is our starting point. Any branches that have an LC ≥ ${currentUC} will be pruned immediately.`,
     root.id,
     rootBreakdown
   );
@@ -202,6 +227,7 @@ export function runBranchAndBound(matrix: number[][]): Step[] {
     if (currentNode.level === n) {
       const totalCost = currentNode.lc;
       if (totalCost < currentUC) {
+        const previousUC = currentUC;
         currentUC = totalCost;
         incumbentAssignments = [...currentNode.assignments];
         currentNode.status = "expanded";
@@ -211,9 +237,7 @@ export function runBranchAndBound(matrix: number[][]): Step[] {
         );
         pushStep(
           `New Optimal Solution Found! Cost = ${totalCost}`,
-          `Node ${currentNode.id} is a complete assignment!\n\nAll ${n} crews have been assigned.\n\nTotal cost = ${totalCost}.\n\nThis is better than our previous best (UC = ${
-            currentUC === totalCost ? "∞" : currentUC
-          }), so we update UC = ${totalCost}.\n\nWe continue exploring to make sure this is truly optimal.`,
+          `Node ${currentNode.id} is a complete assignment!\n\nAll ${n} crews have been assigned.\n\nTotal cost = ${totalCost}.\n\nThis is strictly better than our previous best (UC = ${previousUC}), so we update UC = ${totalCost}.\n\nWe continue exploring our live nodes to make sure this is truly optimal.`,
           currentNode.id,
           leafBD
         );
@@ -300,6 +324,7 @@ export function runBranchAndBound(matrix: number[][]): Step[] {
   // ── Mark optimal path ───────────────────────────────────────────────────────
   // Trace back from the optimal leaf to root
   if (incumbentAssignments.length > 0) {
+    let tracedInTree = false;
     // Find the node whose assignments match incumbentAssignments exactly
     for (const node of allNodes.values()) {
       if (
@@ -316,6 +341,7 @@ export function runBranchAndBound(matrix: number[][]): Step[] {
           cur.status = "optimal";
           cur = cur.parentId !== null ? allNodes.get(cur.parentId) : undefined;
         }
+        tracedInTree = true;
         break;
       }
     }
@@ -330,7 +356,11 @@ export function runBranchAndBound(matrix: number[][]): Step[] {
       "✅ Optimal Solution Found!",
       `Branch and Bound has finished exploring all live nodes.\n\nOptimal Assignment:\n${incumbentAssignments
         .map((a) => `C${a.crew + 1} → F${a.flight + 1} (cost: ${matrix[a.crew][a.flight]})`)
-        .join("\n")}\n\nMinimum Total Cost = ${totalCost}\n\nThe green path in the tree shows the optimal route taken.`,
+        .join("\n")}\n\nMinimum Total Cost = ${totalCost}\n\n${
+          tracedInTree 
+            ? "The green path in the tree shows the optimal route taken." 
+            : "The optimal assignment was found via our initial Greedy upper-bound. The Branch & Bound search successfully proved that no absolutely better path existed because all alternatives were safely pruned!"
+        }`,
       null,
       finalBD,
       incumbentAssignments
